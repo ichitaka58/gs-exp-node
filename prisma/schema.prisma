@@ -1,0 +1,33 @@
+// prisma/schema.prisma
+
+// ========================================
+// Prisma の設定
+// ========================================
+
+// generator: Prisma Client を生成する設定
+// → JavaScript から DB を操作するためのコードを自動生成
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+// datasource: どのデータベースに接続するか
+// → PostgreSQL を使い、接続情報は環境変数から取得
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ========================================
+// Post モデル（投稿）
+// ========================================
+// model = テーブルの設計図
+
+model Post {
+  id        Int      @id @default(autoincrement())
+  content   String
+  imageUrl  String?
+  userId    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
