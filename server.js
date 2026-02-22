@@ -39,21 +39,58 @@ app.get("/", (req, res) => {
 });
 
 // ========================================
-// 投稿一覧取得 API
+// 投稿一覧取得 API（更新版）
 // ========================================
-// GET /api/posts にアクセスしたときの処理
+// いいね数といいね状態も含めて取得
+// 既存の app.get("/api/posts") を以下に置き換え
 
 app.get("/api/posts", async (req, res) => {
   try {
+    // クエリパラメータからユーザーIDを取得（任意）
+    // 例: /api/posts?userId=xxx
+    const userId = req.query.userId;
+
     const posts = await prisma.post.findMany({
-      // prisma.post = Postテーブルを操作
       orderBy: { createdAt: "desc" },
+      include: {
+        // ========================================
+        // いいねの数を取得
+        // ========================================
+        // _count = リレーション先の数をカウント
+        _count: {
+          select: { likes: true },
+        },
+
+        // ========================================
+        // 現在のユーザーがいいねしているかどうか
+        // ========================================
+        likes: userId
+          ? {
+            // userId が指定されていれば、そのユーザーのいいねだけ取得
+            where: { userId },
+            select: { id: true },
+          }
+          : false,
+        // userId がなければ取得しない（false）
+      },
     });
-    if(posts.length === 0) {
-      return res.json({ message: "投稿がひとつもありません"});
-    }
-    res.json(posts);
-    // 取得したデータをJSONで返す
+
+    // レスポンス用にデータを整形
+    // API の利用者が使いやすい形に変換
+    const formattedPosts = posts.map((post) => ({
+      id: post.id,
+      content: post.content,
+      imageUrl: post.imageUrl,
+      userId: post.userId,
+      createdAt: post.createdAt,
+      updatedAt: post.updatedAt,
+      likeCount: post._count.likes,
+      // → _count.likes = いいねの数
+      isLiked: userId ? post.likes.length > 0 : false,
+      // → likes 配列に要素があれば true
+    }));
+
+    res.json(formattedPosts);
   } catch (error) {
     console.error("Error fetching posts:", error);
     res.status(500).json({ error: "投稿の取得に失敗しました" });
@@ -63,22 +100,16 @@ app.get("/api/posts", async (req, res) => {
 // ========================================
 // 投稿作成 API
 // ========================================
-// POST /api/posts にアクセスしたときの処理
+// POST /api/posts
+
 app.post("/api/posts", async (req, res) => {
   try {
-    // ここで送られたデータを受け取ります
     const { content, imageUrl, userId } = req.body;
-    // req.body = データの塊でAPIでデータが送られる場所になっている。そこから分割代入というjsのテクニックを使って抜き出しています。
 
-    // バリデーションのチェックをする。
     if (!content || content.trim() === "") {
-      // エラーを通知させる。その結果をresponseとして返却
-      return res.status(400).json({
-        error: "投稿の中身が空なので入力してください",
-      });
+      return res.status(400).json({ error: "投稿内容を入力してください" });
     }
 
-    // 登録の処理の場所です。prismaを使って実際に登録するフェーズ
     const post = await prisma.post.create({
       data: {
         content: content.trim(),
@@ -87,7 +118,6 @@ app.post("/api/posts", async (req, res) => {
       },
     });
 
-    // この形式をDBに登録した後に成功したという結果をstatusでお知らせとデータを戻してくれる
     res.status(201).json(post);
   } catch (error) {
     console.error("Error creating post:", error);
@@ -98,29 +128,118 @@ app.post("/api/posts", async (req, res) => {
 // ========================================
 // 投稿削除 API
 // ========================================
-// DELETE /api/posts/:id にアクセスしたときの処理
-// :id = パスパラメータ（URL の一部として ID を受け取る）
+// DELETE /api/posts/:id
 
 app.delete("/api/posts/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    // req.params = URLのパスパラメータ
-    // req.params.id = :idの部分の値
-    // parseInt() = 文字列を整数に変換
+
     if (isNaN(id)) {
       return res.status(400).json({ error: "無効なIDです" });
     }
 
-    await prisma.post.delete({ where: { id } });
+    await prisma.post.delete({
+      where: { id },
+    });
 
-    res.json({ message: `投稿${id}を削除しました` });
+    res.json({ message: "投稿を削除しました" });
   } catch (error) {
     console.error("Error deleting post:", error);
+
     if (error.code === "P2025") {
-      // P2025 = Prismaのエラーコード（レコードが見つからない）
       return res.status(404).json({ error: "投稿が見つかりません" });
     }
+
     res.status(500).json({ error: "投稿の削除に失敗しました" });
+  }
+});
+
+// ========================================
+// いいね追加 API
+// ========================================
+// POST /api/posts/:id/like
+
+app.post("/api/posts/:id/like", async (req, res) => {
+  try {
+    const postId = parseInt(req.params.id);
+    // → URL から投稿IDを取得
+    //   /api/posts/1/like → 1
+
+    const { userId } = req.body;
+    // → リクエストボディからユーザーIDを取得
+
+    // バリデーション
+    if (isNaN(postId)) {
+      return res.status(400).json({ error: "無効な投稿IDです" });
+    }
+    if (!userId) {
+      return res.status(400).json({ error: "ユーザーIDが必要です" });
+    }
+
+    // いいねを作成
+    const like = await prisma.like.create({
+      data: {
+        postId,
+        userId,
+      },
+    });
+    // → すでに存在する場合は @@unique 制約でエラーになる
+
+    // いいね数を取得して返す
+    const likeCount = await prisma.like.count({
+      where: { postId },
+    });
+
+    res.status(201).json({ likeCount, isLiked: true });
+  } catch (error) {
+    // すでにいいねしている場合
+    if (error.code === "P2002") {
+      // P2002 = ユニーク制約違反（すでに存在する）
+      return res.status(400).json({ error: "すでにいいねしています" });
+    }
+    console.error("Error creating like:", error);
+    res.status(500).json({ error: "いいねに失敗しました" });
+  }
+});
+
+// ========================================
+// いいね削除 API
+// ========================================
+// DELETE /api/posts/:id/like
+
+app.delete("/api/posts/:id/like", async (req, res) => {
+  try {
+    const postId = parseInt(req.params.id);
+    const { userId } = req.body;
+
+    // バリデーション
+    if (isNaN(postId)) {
+      return res.status(400).json({ error: "無効な投稿IDです" });
+    }
+    if (!userId) {
+      return res.status(400).json({ error: "ユーザーIDが必要です" });
+    }
+
+    // いいねを削除
+    await prisma.like.deleteMany({
+      // deleteMany = 条件に一致する全てを削除
+      // delete だと見つからない場合にエラーになるが
+      // deleteMany は見つからなくても OK
+      where: {
+        postId,
+        userId,
+      },
+    });
+
+    // いいね数を取得して返す
+    const likeCount = await prisma.like.count({
+      where: { postId },
+    });
+
+    res.json({ likeCount, isLiked: false });
+  } catch (error) {
+    console.error("Error deleting like:", error);
+    res.status(500).json({ error: "いいねの削除に失敗しました" });
   }
 });
 

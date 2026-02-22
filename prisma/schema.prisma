@@ -30,4 +30,35 @@ model Post {
   userId    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // ========================================
+  // リレーション: 1つの投稿に複数のいいね
+  // ========================================
+  // Post 1 ←→ Like 多 の関係
+  likes     Like[]
+}
+
+// ========================================
+// Like モデル（いいね）
+// ========================================
+
+model Like {
+  id        Int      @id @default(autoincrement())
+  postId    Int      // いいねした投稿のID
+  userId    String   // いいねしたユーザーのID
+  createdAt DateTime @default(now())
+
+  // ========================================
+  // リレーション: いいねは1つの投稿に属する
+  // ========================================
+  // fields: [postId] → Like テーブルの postId が
+  // references: [id] → Post テーブルの id を参照
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  // onDelete: Cascade → 投稿が削除されたら、そのいいねも自動で削除
+
+  // ========================================
+  // 複合ユニーク制約
+  // ========================================
+  // 同じユーザーが同じ投稿に2回いいねできないようにする
+  @@unique([postId, userId])
 }
